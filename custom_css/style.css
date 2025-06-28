@@ -1,0 +1,64 @@
+.close-app {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1000;
+  text-decoration: none;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  background-color: #eee;
+  color: #333;
+}
+
+.block {
+  width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 1rem;
+  background-color: #eee;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+}
+
+
+.buttonrow{
+  display: flex;
+}
+
+.action-button {
+    flex: 1; /* чтобы кнопки были одинаковой ширины */
+    min-width: 50px;
+    padding: 0.75em 1em;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;    /* вертикальное центрирование */
+  justify-content: center; /* горизонтальное центрирование */
+  background-color: rgba(0, 0, 0, 0.5); /* полупрозрачный фон */
+  z-index: 999; /* поверх остального контента */
+}
+
+h3.profile-name-display {
+    text-align: center; /* Центрируем текст внутри h3 */
+    margin: 1.5rem auto; /* Центрируем сам блок h3 по горизонтали и добавляем отступы сверху/снизу */
+    padding: 10px 20px; /* Внутренние отступы внутри рамки */
+    border: 1px solid #ddd; /* Тонкая серая рамка */
+    border-radius: 8px; /* Слегка скругляем углы рамки */
+    background-color: #f9f9f9; /* Светлый фон внутри рамки */
+    max-width: 400px; /* Ограничиваем максимальную ширину рамки, чтобы она не растягивалась на весь экран */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05); /* Легкая тень для придания объема */
+    color: #333; /* Цвет текста */
+    font-size: 1.5rem; /* Размер шрифта */
+}
+
+
+
+
