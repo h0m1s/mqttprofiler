@@ -296,8 +296,8 @@
     <head>
         <meta charset="UTF-8" />
         <title>Title</title>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-        <link rel='stylesheet' href="style.css">
+        <link rel="stylesheet" href="pico/pico.min.css">
+        <link rel="stylesheet" href="custom_css/style.css">
     </head>
     <body>
         <a href="/apps/" class="close-app">×</a>
