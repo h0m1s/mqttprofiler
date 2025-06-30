@@ -4,6 +4,25 @@
     local redis_key = "app:mqttprofile"
 
     require('json')
+    require('apps')
+    
+    
+    local function validate_imported_profile(profile_data)
+        if type(profile_data) ~= "table" then
+            return false, "Неверная структура JSON: не таблица."
+        end
+        if type(profile_data.name) ~= "string" then
+            return false, "Неверное имя профиля."
+        end
+        if type(profile_data.description) ~= "string" then
+            return false, "Неверное описание профиля."
+        end
+        if type(profile_data.mapping) ~= "table" then
+            return false, "Неверный массив сопоставления."
+        end
+        return true
+    end
+    
 
 
 
@@ -120,7 +139,7 @@
     end
 
 
-    local function save_topic_object(datatype, tags, name_mapped, boolon, booloff)
+    local function save_topic_object(datatype, tags, name_mapped, boolon, booloff, address)
         local json_profile = red:get(redis_key)
         local profile_insert = json.pdecode(json_profile)
 
@@ -128,9 +147,20 @@
         profile_insert.mapping[last_i].name = name_mapped
         profile_insert.mapping[last_i].datatype = datatype
         profile_insert.mapping[last_i].tags = tags
+        profile_insert.mapping[last_i].address = address
+        
 
-        profile_insert.mapping[last_i].boolon = boolon
-        profile_insert.mapping[last_i].booloff = booloff
+        if type(boolon) == "table" and #boolon > 0 then
+            profile_insert.mapping[last_i].boolon = boolon[1] -- Берем первое значение
+        else
+            profile_insert.mapping[last_i].boolon = boolon or "" -- Иначе используем как есть или пустую строку
+        end
+
+        if type(booloff) == "table" and #booloff > 0 then
+            profile_insert.mapping[last_i].booloff = booloff[1] -- Берем первое значение
+        else
+            profile_insert.mapping[last_i].booloff = booloff or "" -- Иначе используем как есть или пустую строку
+        end
 
         red:set(redis_key, json.encode(profile_insert))
     end
@@ -233,7 +263,7 @@
                 save_topic_both(args.topic, args.retain, args.qospub, args.delta, args.qossub, args.throttle, args.jsonpath)
             end
 
-            save_topic_object(args.datatype, args.tags, args.name_mapped, args.boolon, args.booloff)
+            save_topic_object(args.datatype, args.tags, args.name_mapped, args.boolon, args.booloff, args.address)
             return ngx.redirect("/apps/data/mqttprofile") 
         end
 
@@ -259,6 +289,54 @@
         if args.action == "delete_topic" then
             delete_topic(args.topic_index)
             return ngx.redirect("/apps/data/mqttprofile") 
+        end
+        
+        -- Удаление профиля
+        if args.action == "delete_profile" then
+            red:del(redis_key)
+            return ngx.redirect("/apps/data/mqttprofile") 
+        end
+        
+        -- Импорт профиля
+        if args.action == "import_profile" then
+            ngx.req.read_body()
+            local body_data = ngx.req.get_body_data()
+
+            if not body_data then
+                ngx.status = ngx.HTTP_BAD_REQUEST
+                ngx.say("Не удалось получить тело запроса.")
+                return ngx.exit(ngx.HTTP_BAD_REQUEST)
+            end
+
+            -- Поиск содержимого файла (multipart-формат)
+            local file_content = body_data:match('Content%-Disposition: form%-data; name="profile_file"; filename=".-"\r\nContent%-Type: application/json\r\n\r\n(.-)\r\n%-%-')
+
+            if not file_content or #file_content == 0 then
+                ngx.status = ngx.HTTP_BAD_REQUEST
+                ngx.say("Файл не загружен или пуст.")
+                return ngx.exit(ngx.HTTP_BAD_REQUEST)
+            end
+
+            -- Попытка декодирования JSON
+            local ok, decoded_profile = pcall(json.pdecode, file_content)
+            if not ok or type(decoded_profile) ~= "table" then
+                ngx.status = ngx.HTTP_UNPROCESSABLE_ENTITY
+                ngx.say("Ошибка разбора JSON из файла.")
+                return ngx.exit(ngx.HTTP_UNPROCESSABLE_ENTITY)
+            end
+
+            -- Проверка структуры
+            local is_valid, error_msg = validate_imported_profile(decoded_profile)
+            if not is_valid then
+                ngx.status = ngx.HTTP_BAD_REQUEST
+                ngx.say("Неверная структура профиля: " .. (error_msg or "Неизвестная ошибка."))
+                return ngx.exit(ngx.HTTP_BAD_REQUEST)
+            end
+
+            -- Сохраняем
+            red:set(redis_key, json.encode(decoded_profile))
+            ngx.say("All godd )))): file_content = ", file_content or "nil")
+            return ngx.redirect("/apps/data/mqttprofile")
         end
 
     end
@@ -309,14 +387,19 @@
     <? if profile.name == nil then ?>
         <div class="main">
             <button id="showCreateProfile">Create Profile</button>
+            <button id="showImportProfile" class="button-inline">Import Profile</button>
         </div>
     <? else ?>
         <div class="button-row-container">
             <div class="button-group-left">
                 <button id="showCreateTopic" class="button-inline">Create topic</button>
+                <form method="post">
+                    <input type="hidden" name="action" value="delete_profile">
+                    <button type="submit" class="button-inline">Удалить профиль</button>
+                </form>
             </div>
 
-            <? if #profile.mapping ~= 0 then ?>
+            <? if profile.mapping ~= nil and #profile.mapping > 0 then ?>
                 <div class="button-group-right">
                     <button id="showCreateMassAdd" class="button-inline">Create mass address</button>
                     <button id="showAddObjects" class="button-inline">Create mapped objects</button>
@@ -334,7 +417,7 @@
             
             <!-- Окошко создания профиля -->
             <div class="modal" id="modal_create_profile" style="display: none;">
-                <form id = "Create_profile" method ="post" style = "display: none">
+                <form id = "Create_profile" method ="post">
                     <div class = "block">
 
                         <input type="hidden" name="action" value="create_profile">
@@ -357,7 +440,7 @@
             
             <!-- Окошко добавления топика -->
             <div class="modal" id="modal_create_topic" style="display: none;">
-                <form id="Create_topic" method="post" style="display: none">
+                <form id="Create_topic" method="post">
                     <div class="block">
 
                         <input type="hidden" name="action" value="add_topic">
@@ -443,7 +526,7 @@
             
             <!-- Окошко добавления множества адрессов -->
             <div class="modal" id="modal_create_mass_add" style="display: none;">
-                <form id = "Create_mass_Add" method ="post" style = "display: none">
+                <form id = "Create_mass_Add" method ="post">
                     <div class = "block">
 
                         <input type="hidden" name="action" value="create_mass_add">
@@ -460,10 +543,10 @@
             </div>
             
              <div class="modal" id="modal_add_objects" style="display: none;">
-                <form id = "Add_objects" method ="post" style = "display: none">
+                <form id = "Add_objects" method ="post">
                     <div class = "block">
 
-                        <input type="hidden" name="action" value="add_mqtt_client">
+                        <input type="hidden" name="action" value="add_objects">
 
                         <div class = "buttonrow">
                             <button class = "action-button" type = "submit">Add</button>
@@ -475,16 +558,30 @@
             </div>
             
             <div class="modal" id="modal_add_mqtt" style="display: none;">
-                <form id = "Add_mqtt" method ="post" style = "display: none">
+                <form id = "Add_mqtt" method ="post">
                     <div class = "block">
 
-                        <input type="hidden" name="action" value="add_objects">
+                        <input type="hidden" name="action" value="add_mqtt_client">
 
                         <div class = "buttonrow">
                             <button class = "action-button" type = "submit">Add</button>
                             <button class = "action-button" id="cancel_add_mqtt" type="reset">Cancel</button>
                         </div>
 
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal" id="modal_import_profile" style="display: none;">
+                <form id="Import_profile" method="post" enctype="multipart/form-data">
+                    <div class="block">
+                        <input type="hidden" name="action" value="import_profile">
+                        <h4>Импорт MQTT Профиля</h4>
+                        <input type="file" name="profile_file" accept=".json" required>
+                        <div class="buttonrow">
+                            <button class="action-button" type="submit">Импорт</button>
+                            <button class="action-button" id="cancel_import_profile" type="reset">Отмена</button>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -505,10 +602,11 @@
                 
                 <tbody>
                     <?
-                    for index, item in ipairs(profile.mapping) do
-                        local direction = escape(item.direction or "")
-                        local topic = escape(item.topic or "")
-                        local name_mapped = escape(item.name or "") 
+                    if profile.mapping ~= nil then
+                        for index, item in ipairs(profile.mapping) do
+                            local direction = escape(item.direction or "")
+                            local topic = escape(item.topic or "")
+                            local name_mapped = escape(item.name or "") 
                     ?>
                     <tr>
                         <td><?= index ?></td>
@@ -527,188 +625,243 @@
                         </td>
                     </tr>
                     <? end ?>
+                    <? end ?>
                 </tbody>
             </table>
         </div>
         <script>
-            document.getElementById('showCreateProfile').addEventListener('click', () => {
-            document.getElementById('Create_profile').style.display = 'block';
-            document.getElementById('modal_create_profile').style.display = 'flex';
-        });
-
-            document.getElementById('showCreateTopic').addEventListener('click', () => {
-            document.getElementById('Create_topic').style.display = 'block';
-            document.getElementById('modal_create_topic').style.display = 'flex';
-        });
-
-            document.getElementById('cancel_profile').addEventListener('click', () => {
-            document.getElementById('Create_profile').style.display = 'none';
-            document.getElementById('modal_create_profile').style.display = 'none';
-        });
-
-            document.getElementById('cancel_topic').addEventListener('click', () => {
-            document.getElementById('Create_topic').style.display = 'none';
-            document.getElementById('modal_create_topic').style.display = 'none';
-        });
-
-
-            document.getElementById('showCreateMassAdd').addEventListener('click', () => {
-            document.getElementById('Create_mass_Add').style.display = 'block';
-            document.getElementById('modal_create_mass_add').style.display = 'flex';
-        });
-
-            document.getElementById('cancel_mass_add').addEventListener('click', () => {
-            document.getElementById('Create_mass_Add').style.display = 'none';
-            document.getElementById('modal_create_mass_add').style.display = 'none';
-        });
-
-
-            document.getElementById('showAddObjects').addEventListener('click', () => {
-            document.getElementById('Add_objects').style.display = 'block';
-            document.getElementById('modal_add_objects').style.display = 'flex';
-        });
-
-            document.getElementById('cancel_add_objects').addEventListener('click', () => {
-            document.getElementById('Add_objects').style.display = 'none';
-            document.getElementById('modal_add_objects').style.display = 'none';
-        });
-
-
-
-            document.getElementById('showAddMqtt').addEventListener('click', () => {
-            document.getElementById('Add_mqtt').style.display = 'block';
-            document.getElementById('modal_add_mqtt').style.display = 'flex';
-        });
-
-            document.getElementById('cancel_add_mqtt').addEventListener('click', () => {
-            document.getElementById('Add_mqtt').style.display = 'none';
-            document.getElementById('modal_add_mqtt').style.display = 'none';
-        });
-
-            document.addEventListener('click', function(event) {
-            // Обработка кликов по кнопкам "Редактировать"
-            if (event.target.classList.contains('edit-topic-btn')) {
-                const row = event.target.closest('tr'); // Находим ближайшую строку таблицы
-                const index = row.querySelector('td:first-child').textContent; // Получаем индекс из первого столбца
-                alert('Редактировать топик по индексу: ' + index);
-                // Открываем модальное окно редактирования, заполняем поля и т.д.
-            }
-            // Клики по кнопкам "Удалить" уже обрабатываются отправкой формы, что хорошо.
-            // Но если бы у вас было удаление через JS без формы, вы бы тоже использовали делегирование.
-        });
-
-
-
             document.addEventListener('DOMContentLoaded', function() {
-                const directionSelect = document.getElementById('direction_select');
-                const datatypeSelect = document.getElementById('datatype_select');
+            // Получаем ссылки на элементы, предварительно проверяя их существование
+            const showCreateProfileBtn = document.getElementById('showCreateProfile');
+            const showCreateTopicBtn = document.getElementById('showCreateTopic');
+            const showCreateMassAddBtn = document.getElementById('showCreateMassAdd');
+            const showAddObjectsBtn = document.getElementById('showAddObjects');
+            const showAddMqttBtn = document.getElementById('showAddMqtt');
 
-                // Все поля, зависящие от направления (direction)
+            const cancelProfileBtn = document.getElementById('cancel_profile');
+            const cancelTopicBtn = document.getElementById('cancel_topic');
+            const cancelMassAddBtn = document.getElementById('cancel_mass_add');
+            const cancelAddObjectsBtn = document.getElementById('cancel_add_objects');
+            const cancelAddMqttBtn = document.getElementById('cancel_add_mqtt');
+
+            const createProfileForm = document.getElementById('Create_profile');
+            const modalCreateProfile = document.getElementById('modal_create_profile');
+
+            const createTopicForm = document.getElementById('Create_topic');
+            const modalCreateTopic = document.getElementById('modal_create_topic');
+
+            const createMassAddForm = document.getElementById('Create_mass_Add');
+            const modalCreateMassAdd = document.getElementById('modal_create_mass_add');
+
+            const addObjectsForm = document.getElementById('Add_objects');
+            const modalAddObjects = document.getElementById('modal_add_objects');
+
+            const addMqttForm = document.getElementById('Add_mqtt');
+            const modalAddMqtt = document.getElementById('modal_add_mqtt');
+
+            const directionSelect = document.getElementById('direction_select');
+            const datatypeSelect = document.getElementById('datatype_select');
+            
+            
+            const showImportProfileBtn = document.getElementById('showImportProfile'); // New: Import button
+            const cancelImportProfileBtn = document.getElementById('cancel_import_profile'); // New: Cancel Import button
+            const importProfileForm = document.getElementById('Import_profile'); // New: Import form
+            const modalImportProfile = document.getElementById('modal_import_profile'); // New: Import modal
+
+
+            // Прикрепляем слушатели только в том случае, если элемент существует
+            if (showCreateProfileBtn) {
+                showCreateProfileBtn.addEventListener('click', () => {
+                    if (createProfileForm) createProfileForm.style.display = 'block';
+                    if (modalCreateProfile) modalCreateProfile.style.display = 'flex';
+                });
+            }
+
+            if (showCreateTopicBtn) {
+                showCreateTopicBtn.addEventListener('click', () => {
+                    if (createTopicForm) createTopicForm.style.display = 'block';
+                    if (modalCreateTopic) modalCreateTopic.style.display = 'flex';
+                });
+            }
+
+            if (showCreateMassAddBtn) {
+                showCreateMassAddBtn.addEventListener('click', () => {
+                    if (createMassAddForm) createMassAddForm.style.display = 'block';
+                    if (modalCreateMassAdd) modalCreateMassAdd.style.display = 'flex';
+                });
+            }
+
+            if (showAddObjectsBtn) {
+                showAddObjectsBtn.addEventListener('click', () => {
+                    // Эта кнопка открывает форму "Add_objects", но action там "add_mqtt_client"
+                    // Предполагаем, что вы имели в виду modal_add_objects и Add_objects.
+                    if (addObjectsForm) addObjectsForm.style.display = 'block';
+                    if (modalAddObjects) modalAddObjects.style.display = 'flex';
+                });
+            }
+
+            if (showAddMqttBtn) {
+                showAddMqttBtn.addEventListener('click', () => {
+                    // Эта кнопка открывает форму "Add_mqtt", но action там "add_objects"
+                    // Предполагаем, что вы имели в виду modal_add_mqtt и Add_mqtt.
+                    if (addMqttForm) addMqttForm.style.display = 'block';
+                    if (modalAddMqtt) modalAddMqtt.style.display = 'flex';
+                });
+            }
+            
+            if (showImportProfileBtn) {
+                showImportProfileBtn.addEventListener('click', () => {
+                    if (importProfileForm) importProfileForm.style.display = 'block';
+                    if (modalImportProfile) modalImportProfile.style.display = 'flex';
+                });
+            }
+
+            // Кнопки отмены
+            if (cancelProfileBtn) {
+                cancelProfileBtn.addEventListener('click', () => {
+                    if (createProfileForm) createProfileForm.style.display = 'none';
+                    if (modalCreateProfile) modalCreateProfile.style.display = 'none';
+                });
+            }
+
+            if (cancelTopicBtn) {
+                cancelTopicBtn.addEventListener('click', () => {
+                    if (createTopicForm) createTopicForm.style.display = 'none';
+                    if (modalCreateTopic) modalCreateTopic.style.display = 'none';
+                });
+            }
+
+            if (cancelMassAddBtn) {
+                cancelMassAddBtn.addEventListener('click', () => {
+                    if (createMassAddForm) createMassAddForm.style.display = 'none';
+                    if (modalCreateMassAdd) modalCreateMassAdd.style.display = 'none';
+                });
+            }
+
+            if (cancelAddObjectsBtn) {
+                cancelAddObjectsBtn.addEventListener('click', () => {
+                    if (addObjectsForm) addObjectsForm.style.display = 'none';
+                    if (modalAddObjects) modalAddObjects.style.display = 'none';
+                });
+            }
+
+            if (cancelAddMqttBtn) {
+                cancelAddMqttBtn.addEventListener('click', () => {
+                    if (addMqttForm) addMqttForm.style.display = 'none';
+                    if (modalAddMqtt) modalAddMqtt.style.display = 'none';
+                });
+            };
+            
+            if (cancelImportProfileBtn) {
+                cancelImportProfileBtn.addEventListener('click', () => {
+                    if (importProfileForm) importProfileForm.style.display = 'none';
+                    if (modalImportProfile) modalImportProfile.style.display = 'none';
+                });
+            }
+
+            // Делегирование событий для кнопок редактирования (уже хорошо)
+            document.addEventListener('click', function(event) {
+                if (event.target.classList.contains('edit-topic-btn')) {
+                    const row = event.target.closest('tr');
+                    const index = row.querySelector('td:first-child').textContent;
+                    alert('Редактировать топик по индексу: ' + index);
+                }
+            });
+
+            // Ваша логика видимости полей формы (уже была)
+            // Убедитесь, что она также внутри DOMContentLoaded
+            function updateFieldVisibility() {
+                const selectedDirection = directionSelect ? directionSelect.value : '';
+                const selectedDatatype = datatypeSelect ? datatypeSelect.value : '';
+
+                // ... (остальной код updateFieldVisibility)
                 const directionDependentFields = document.querySelectorAll('.direction-dependent');
-
-                // Поля, зависящие от datatype='bool'
                 const boolDependentFields = document.querySelectorAll('.bool-dependent');
-
-                // Поле 'topic' всегда видимо
                 const topicField = document.querySelector('input[name="topic"]');
-
-                // Поля, которые всегда должны быть видимы (tags, name_mapped)
                 const alwaysVisibleFields = document.querySelectorAll('.always-visible');
 
-                // Функция для установки атрибута required
                 function setRequired(field, isRequired) {
                     if (field) {
                         if (isRequired) {
-                            // Если поле должно быть required и у него не было исходного required, добавляем data-атрибут
                             if (!field.hasAttribute('data-original-required')) {
                                 field.setAttribute('data-original-required', 'true');
                             }
                             field.required = true;
                         } else {
-                            // Если поле не должно быть required, удаляем атрибут required
                             field.required = false;
                         }
                     }
                 }
 
-                function updateFieldVisibility() {
-                    const selectedDirection = directionSelect.value;
-                    const selectedDatatype = datatypeSelect.value;
-
-                    // 1. Скрываем все поля, зависящие от 'direction' и 'datatype'
-                    directionDependentFields.forEach(field => {
-                        field.style.display = 'none';
-                        setRequired(field, false); // Снимаем required при скрытии
-                    });
-
-                    boolDependentFields.forEach(field => {
-                        field.style.display = 'none';
-                        setRequired(field, false); // Снимаем required при скрытии
-                    });
-
-                    // 2. Показываем поля, которые всегда должны быть видны
-                    if (topicField) {
-                        topicField.style.display = '';
-                        setRequired(topicField, true);
-                    }
-                    alwaysVisibleFields.forEach(field => {
-                        field.style.display = '';
-                        // Их required состояние определяется в HTML, если не указано, остается false
-                    });
-
-                    // 3. Логика для 'direction'
-                    if (selectedDirection === 'out') {
-                        document.querySelectorAll('.direction-out').forEach(field => {
-                            field.style.display = '';
-                            // Восстанавливаем required, если было изначально
-                            if (field.hasAttribute('data-original-required')) {
-                                setRequired(field, true);
-                            }
-                        });
-                    } else if (selectedDirection === 'in') {
-                        document.querySelectorAll('.direction-in').forEach(field => {
-                            field.style.display = '';
-                            if (field.hasAttribute('data-original-required')) {
-                                setRequired(field, true);
-                            }
-                        });
-                    } else if (selectedDirection === 'both') {
-                        document.querySelectorAll('.direction-in, .direction-out').forEach(field => {
-                            field.style.display = '';
-                            if (field.hasAttribute('data-original-required')) {
-                                setRequired(field, true);
-                            }
-                        });
-                    }
-
-                    // 4. Логика для 'datatype'
-                    if (selectedDatatype === 'bool') {
-                        boolDependentFields.forEach(field => {
-                            field.style.display = '';
-                            // Предположим, что bool-зависимые поля не обязательны по умолчанию,
-                            // если только вы не добавите data-original-required к ним
-                            if (field.hasAttribute('data-original-required')) {
-                                setRequired(field, true);
-                            }
-                        });
-                    }
-                }
-
-                // Сохраняем исходное состояние required для всех полей, которые могут быть скрыты
-                // Это должно быть сделано один раз при загрузке страницы
-                document.querySelectorAll('input[required], select[required], textarea[required]').forEach(field => {
-                    if (field.required) {
-                        field.setAttribute('data-original-required', 'true');
-                    }
+                directionDependentFields.forEach(field => {
+                    field.style.display = 'none';
+                    setRequired(field, false);
                 });
 
-                // Инициализируем видимость при загрузке страницы
-                updateFieldVisibility();
+                boolDependentFields.forEach(field => {
+                    field.style.display = 'none';
+                    setRequired(field, false);
+                });
 
-                // Добавляем слушатели событий для обоих select
+                if (topicField) {
+                    topicField.style.display = '';
+                    setRequired(topicField, true);
+                }
+                alwaysVisibleFields.forEach(field => {
+                    field.style.display = '';
+                });
+
+                if (selectedDirection === 'out') {
+                    document.querySelectorAll('.direction-out').forEach(field => {
+                        field.style.display = '';
+                        if (field.hasAttribute('data-original-required')) {
+                            setRequired(field, true);
+                        }
+                    });
+                } else if (selectedDirection === 'in') {
+                    document.querySelectorAll('.direction-in').forEach(field => {
+                        field.style.display = '';
+                        if (field.hasAttribute('data-original-required')) {
+                            setRequired(field, true);
+                        }
+                    });
+                } else if (selectedDirection === 'both') {
+                    document.querySelectorAll('.direction-in, .direction-out').forEach(field => {
+                        field.style.display = '';
+                        if (field.hasAttribute('data-original-required')) {
+                            setRequired(field, true);
+                        }
+                    });
+                }
+
+                if (selectedDatatype === 'bool') {
+                    boolDependentFields.forEach(field => {
+                        field.style.display = '';
+                        if (field.hasAttribute('data-original-required')) {
+                            setRequired(field, true);
+                        }
+                    });
+                }
+            }
+
+            // Сохраняем исходное состояние required
+            document.querySelectorAll('input[required], select[required], textarea[required]').forEach(field => {
+                if (field.required) {
+                    field.setAttribute('data-original-required', 'true');
+                }
+            });
+
+            // Инициализируем видимость
+            updateFieldVisibility();
+
+            // Добавляем слушатели событий для обоих select (если они существуют)
+            if (directionSelect) {
                 directionSelect.addEventListener('change', updateFieldVisibility);
+            }
+            if (datatypeSelect) {
                 datatypeSelect.addEventListener('change', updateFieldVisibility);
-    });
+            }
+        });
         </script>
     </body>
 </html>
