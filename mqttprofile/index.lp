@@ -299,44 +299,7 @@
         
         -- Импорт профиля
         if args.action == "import_profile" then
-            ngx.req.read_body()
-            local body_data = ngx.req.get_body_data()
-
-            if not body_data then
-                ngx.status = ngx.HTTP_BAD_REQUEST
-                ngx.say("Не удалось получить тело запроса.")
-                return ngx.exit(ngx.HTTP_BAD_REQUEST)
-            end
-
-            -- Поиск содержимого файла (multipart-формат)
-            local file_content = body_data:match('Content%-Disposition: form%-data; name="profile_file"; filename=".-"\r\nContent%-Type: application/json\r\n\r\n(.-)\r\n%-%-')
-
-            if not file_content or #file_content == 0 then
-                ngx.status = ngx.HTTP_BAD_REQUEST
-                ngx.say("Файл не загружен или пуст.")
-                return ngx.exit(ngx.HTTP_BAD_REQUEST)
-            end
-
-            -- Попытка декодирования JSON
-            local ok, decoded_profile = pcall(json.pdecode, file_content)
-            if not ok or type(decoded_profile) ~= "table" then
-                ngx.status = ngx.HTTP_UNPROCESSABLE_ENTITY
-                ngx.say("Ошибка разбора JSON из файла.")
-                return ngx.exit(ngx.HTTP_UNPROCESSABLE_ENTITY)
-            end
-
-            -- Проверка структуры
-            local is_valid, error_msg = validate_imported_profile(decoded_profile)
-            if not is_valid then
-                ngx.status = ngx.HTTP_BAD_REQUEST
-                ngx.say("Неверная структура профиля: " .. (error_msg or "Неизвестная ошибка."))
-                return ngx.exit(ngx.HTTP_BAD_REQUEST)
-            end
-
-            -- Сохраняем
-            red:set(redis_key, json.encode(decoded_profile))
-            ngx.say("All godd )))): file_content = ", file_content or "nil")
-            return ngx.redirect("/apps/data/mqttprofile")
+            return ngx.redirect("/apps/data/mqttprofile") 
         end
 
     end
@@ -384,35 +347,38 @@
                 <h2>MQTT PROFILE</h2>
             </header>
             
-    <? if profile.name == nil then ?>
-        <div class="main">
-            <button id="showCreateProfile">Create Profile</button>
-            <button id="showImportProfile" class="button-inline">Import Profile</button>
-        </div>
-    <? else ?>
-        <div class="button-row-container">
-            <div class="button-group-left">
-                <button id="showCreateTopic" class="button-inline">Create topic</button>
-                <form method="post">
-                    <input type="hidden" name="action" value="delete_profile">
-                    <button type="submit" class="button-inline">Удалить профиль</button>
-                </form>
+            <div class="top-right-buttons-container">
+                <button id="showImportProfile" class="small-image-button" title="Import Profile">
+                    <img src="icons/import.png" alt="Import">
+                </button>
+                <? if profile.name ~= nil then ?>
+                    <a href="?action=export_profile" role="button" class="small-image-button" title="Export Profile">
+                        <img src="icons/export.png" alt="Export">
+                    </a>
+                <? end ?>
             </div>
 
-            <? if profile.mapping ~= nil and #profile.mapping > 0 then ?>
-                <div class="button-group-right">
-                    <button id="showCreateMassAdd" class="button-inline">Create mass address</button>
-                    <button id="showAddObjects" class="button-inline">Create mapped objects</button>
-                    <button id="showAddMqtt" class="button-inline">Add topics to Mqtt Client</button>
-                </div>
+            <? if profile.name == nil then ?>
+                <button class="center-button" id="showCreateProfile">Create Profile</button>
+            <? else ?>
+                <form method="post">
+                    <input type="hidden" name="action" value="delete_profile">
+                    <button type="submit" class="delete-profile-top-left">Delete Profile</button>
+                </form>
+
+                <div class="button-row-container">
+                    <button id="showCreateTopic" class="button-inline">Create topic</button>
+                    </div>
+
+                <? if profile.mapping ~= nil and #profile.mapping > 0 then ?>
+                    <div class="mass-action-buttons-container">
+                        <button id="showCreateMassAdd" class="mass-action-button">Create mass address</button>
+                        <button id="showAddObjects" class="mass-action-button">Create mapped objects</button>
+                        <button id="showAddMqtt" class="mass-action-button">Add topics to Mqtt Client</button>
+                    </div>
+                <? end ?>
             <? end ?>
-            <div class="button-group-right">
-                <a href="?action=export_profile" role="button" class="contrast">Export Profile</a>
-            </div>
-        </div>
-    <? end ?>
-            
-            
+
             
             
             <!-- Окошко создания профиля -->
@@ -606,20 +572,20 @@
                         for index, item in ipairs(profile.mapping) do
                             local direction = escape(item.direction or "")
                             local topic = escape(item.topic or "")
-                            local name_mapped = escape(item.name or "") 
+                            local name_mapped = escape(item.name or "")
                     ?>
                     <tr>
                         <td><?= index ?></td>
                         <td><?= direction ?></td>
                         <td><?= topic ?></td>
                         <td><?= name_mapped ?></td>
-                        <td>
-                            <div class = "buttonrow">
-                                <button class="contrast edit-topic-btn">Редактировать</button>
+                        <td class="actions-cell">
+                            <div class="topic-action-buttons">
+                                <button class="table-button blue">Edit</button>
                                 <form method="post" style="display: inline; margin-left: 5px;">
                                     <input type="hidden" name="action" value="delete_topic">
                                     <input type="hidden" name="topic_index" value="<?= index ?>">
-                                    <button type="submit" class="secondary">Удалить</button>
+                                    <button type="submit" class="table-button red">Delete</button>
                                 </form>
                             </div>
                         </td>
@@ -628,6 +594,7 @@
                     <? end ?>
                 </tbody>
             </table>
+            </div>
         </div>
         <script>
             document.addEventListener('DOMContentLoaded', function() {
